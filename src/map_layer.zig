@@ -1,16 +1,14 @@
 const std = @import("std");
 const testing = std.testing;
-const expectEqual = testing.expectEqual;
 
 const Allocator = std.mem.Allocator;
 
 const grid_layer = @import("grid_layer.zig");
 const GridLayer = grid_layer.GridLayer;
 const GridPosition = grid_layer.GridPosition;
-const GridIterator = grid_layer.GridIterator;
 
-const MapPosition = struct { x: f32, y: f32 };
-const Length = struct { width: f32, height: f32 };
+pub const MapPosition = struct { x: f32, y: f32 };
+pub const Length = struct { width: f32, height: f32 };
 
 pub const MapError = error{
     SizeError,
@@ -41,22 +39,22 @@ pub const MapLayer = struct {
 
     pub fn recenter(self: *MapLayer, center: MapPosition) void {
         self.center = center;
-        const offset_x = @as(i32, @intFromFloat(center.x / self.resolution)) - @divFloor(self.grid.width, 2);
-        const offset_y = @as(i32, @intFromFloat(center.y / self.resolution)) - @divFloor(self.grid.height, 2);
-
-        self.grid.reposition(offset_x, offset_y);
+        self.fill(std.math.nan(f32));
     }
 
     pub fn map_to_grid_space(self: *const MapLayer, pos: MapPosition) GridPosition {
-        const grid_x = (pos.x + self.resolution / 2) / self.resolution;
-        const grid_y = (pos.y + self.resolution / 2) / self.resolution;
+        const f_x = pos.x - (self.center.x - self.size.width / 2);
+        const f_y = pos.y - (self.center.y - self.size.height / 2);
+
+        const grid_x = (f_x + self.resolution / 2) / self.resolution;
+        const grid_y = (f_y + self.resolution / 2) / self.resolution;
 
         return GridPosition{ .x = @intFromFloat(grid_x), .y = @intFromFloat(grid_y) };
     }
 
     pub fn grid_to_map_space(self: *const MapLayer, pos: GridPosition) MapPosition {
-        const map_x = @as(f32, @floatFromInt(pos.x)) * self.resolution;
-        const map_y = @as(f32, @floatFromInt(pos.y)) * self.resolution;
+        const map_x = @as(f32, @floatFromInt(pos.x)) * self.resolution + (self.center.x - self.size.width / 2);
+        const map_y = @as(f32, @floatFromInt(pos.y)) * self.resolution + (self.center.y - self.size.height / 2);
         return MapPosition{ .x = map_x, .y = map_y };
     }
 
@@ -80,12 +78,6 @@ pub const MapLayer = struct {
         return self.grid.get_value(grid_pos);
     }
 
-    pub fn square_iterator(self: *const MapLayer, low_bounds: MapPosition, high_bounds: MapPosition) GridIterator {
-        const low_grid_pos = self.map_to_grid_space(low_bounds);
-        const high_grid_pos = self.map_to_grid_space(high_bounds);
-        return self.grid.square_iterator(low_grid_pos, high_grid_pos);
-    }
-
     pub fn layer_biop(self: *const MapLayer, alloc: Allocator, other: *const MapLayer, comptime op: fn (a: f32, b: f32) f32) !MapLayer {
         if (self.size.width != other.size.width or self.size.height != other.size.height) {
             return MapError.SizeError;
@@ -100,6 +92,55 @@ pub const MapLayer = struct {
         const grid = try self.grid.layer_biop(alloc, &other.grid, op);
         return MapLayer{ .size = self.size, .resolution = self.resolution, .center = self.center, .grid = grid };
     }
+
+    pub fn layer_uop(self: *const MapLayer, alloc: Allocator, comptime op: fn (a: f32) f32) !MapLayer {
+        const grid = try self.grid.layer_uop(alloc, op);
+        return MapLayer{ .size = self.size, .resolution = self.resolution, .center = self.center, .grid = grid };
+    }
+
+    pub fn layer_kernel_op(self: *const MapLayer, alloc: Allocator, comptime K: anytype, kernel: *K) !MapLayer {
+        const grid = try GridLayer.create(alloc, self.grid.width, self.grid.height);
+        const layer = MapLayer{ .size = self.size, .resolution = self.resolution, .center = self.center, .grid = grid };
+
+        var x: i32 = 0;
+        while (x < self.grid.width) : (x += 1) {
+            var y: i32 = 0;
+            while (y < self.grid.height) : (y += 1) {
+                const position = self.grid_to_map_space(GridPosition{ .x = x, .y = y });
+                const value = kernel.process(self, position);
+                if (layer.get_value(position)) |cell| {
+                    cell.* = value;
+                }
+            }
+        }
+
+        return layer;
+    }
+
+    pub fn radius_iterator(self: *const MapLayer, center: MapPosition, radius: f32, comptime K: anytype, kernel: *K) void {
+        const left_map = (center.x - radius);
+        const right_map = (center.x + radius + self.resolution);
+        const top_map = (center.y - radius);
+        const bottom_map = (center.y + radius + self.resolution);
+        const top_left_grid = self.map_to_grid_space(MapPosition{ .x = left_map, .y = top_map });
+        const bottom_right_grid = self.map_to_grid_space(MapPosition{ .x = right_map, .y = bottom_map });
+
+        const adj_radius = radius + self.resolution / 2;
+
+        var x: i32 = top_left_grid.x;
+        while (x < bottom_right_grid.x) : (x += 1) {
+            var y: i32 = top_left_grid.y;
+            while (y < bottom_right_grid.y) : (y += 1) {
+                const map_pos = self.grid_to_map_space(GridPosition{ .x = x, .y = y });
+                const dx = map_pos.x - center.x;
+                const dy = map_pos.y - center.y;
+                const distance2 = dx * dx + dy * dy;
+                if (distance2 <= (adj_radius * adj_radius)) {
+                    kernel.process(self, map_pos);
+                }
+            }
+        }
+    }
 };
 
 test "create grid map" {
@@ -107,8 +148,8 @@ test "create grid map" {
     var a = try MapLayer.create(alloc, Length{ .width = 10, .height = 5 }, 0.05);
     defer a.free(alloc);
 
-    try expectEqual(@as(i32, 101), a.grid.height);
-    try expectEqual(@as(i32, 201), a.grid.width);
+    try testing.expectEqual(@as(i32, 101), a.grid.height);
+    try testing.expectEqual(@as(i32, 201), a.grid.width);
 }
 
 test "grid bounds check" {
@@ -122,7 +163,7 @@ test "grid bounds check" {
         while (y < 10) : (y += 0.1) {
             const expect_valid = (-5.025 <= x) and (x <= 5.025) and (-2.525 <= y) and (y <= 2.525);
 
-            try expectEqual(expect_valid, a.is_valid(MapPosition{ .x = x, .y = y }));
+            try testing.expectEqual(expect_valid, a.is_valid(MapPosition{ .x = x, .y = y }));
         }
     }
 }
@@ -140,7 +181,7 @@ test "grid non zero center bounds check" {
         while (y < 10) : (y += 0.1) {
             const expect_valid = (-0.025 <= x) and (x <= 10.025) and (-2.525 <= y) and (y <= 2.525);
 
-            try expectEqual(expect_valid, a.is_valid(MapPosition{ .x = x, .y = y }));
+            try testing.expectEqual(expect_valid, a.is_valid(MapPosition{ .x = x, .y = y }));
         }
     }
 }
@@ -184,7 +225,7 @@ test "write read grid value" {
         cell.* = 1.0;
     }
     {
-        try expectEqual(@as(f32, 1.0), a.get_value(MapPosition{ .x = 0.0, .y = 0.0 }).?.*);
+        try testing.expectEqual(@as(f32, 1.0), a.get_value(MapPosition{ .x = 0.0, .y = 0.0 }).?.*);
     }
 }
 test "write move and read grid value" {
@@ -194,7 +235,7 @@ test "write move and read grid value" {
 
     a.get_value(MapPosition{ .x = 0.0, .y = 0.0 }).?.* = 1.0;
     a.recenter(MapPosition{ .x = 1.0, .y = 1.0 });
-    try expectEqual(@as(f32, 1.0), a.get_value(MapPosition{ .x = 0.0, .y = 0.0 }).?.*);
+    try testing.expect(std.math.isNan(a.get_value(MapPosition{ .x = 0.0, .y = 0.0 }).?.*));
 }
 
 test "check moving out of bounds clears data" {
@@ -206,37 +247,6 @@ test "check moving out of bounds clears data" {
     a.recenter(MapPosition{ .x = 100.0, .y = 100.0 });
     a.recenter(MapPosition{ .x = 0.0, .y = 0.0 });
     try testing.expect(std.math.isNan(a.get_value(MapPosition{ .x = 0.0, .y = 0.0 }).?.*));
-}
-
-test "square_iterator" {
-    var a = try MapLayer.create(testing.allocator, Length{ .width = 10, .height = 5 }, 0.05);
-    defer a.free(testing.allocator);
-
-    var iter = a.square_iterator(MapPosition{ .x = 0.0, .y = -1.0 }, MapPosition{ .x = 1.0, .y = 2.0 });
-    while (iter.next()) |cell| {
-        cell.* = 1.0;
-    }
-
-    var x: f32 = -10;
-    while (x < 10) : (x += 0.1) {
-        var y: f32 = -10;
-        while (y < 10) : (y += 0.1) {
-            const expect_value = (-0.025 <= x) and (x <= 1.025) and (-1.025 <= y) and (y <= 2.025);
-            if (a.get_value(MapPosition{ .x = x, .y = y })) |cell| {
-                if (expect_value) {
-                    testing.expect(cell.* == 1.0) catch |err| {
-                        std.debug.print("x: {}, y: {}, expected: 1.0\n", .{ x, y });
-                        return err;
-                    };
-                } else {
-                    testing.expect(std.math.isNan(cell.*)) catch |err| {
-                        std.debug.print("x: {}, y: {}, expected: nan\n", .{ x, y });
-                        return err;
-                    };
-                }
-            }
-        }
-    }
 }
 
 test "add layers" {

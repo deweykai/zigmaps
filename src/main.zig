@@ -1,35 +1,26 @@
 const std = @import("std");
 const zigmaps = @import("lib.zig");
 
-const TEST_SIZE = 1000 * 1000 * 50;
+const MapLayer = zigmaps.map_layer.MapLayer;
+const MapLength = zigmaps.map_layer.Length;
+const MapPosition = zigmaps.map_layer.MapPosition;
 
 pub fn main() !void {
     const alloc = std.heap.c_allocator;
 
-    const a: []i32 = try alloc.alloc(i32, TEST_SIZE);
-    defer alloc.free(a);
+    const map = try MapLayer.create(alloc, MapLength{ .width = 10, .height = 10 }, 0.05);
+    defer map.free(alloc);
 
-    for (a, 0..) |*v, i| {
-        v.* = @intCast(i);
-    }
+    map.fill(0.0);
 
-    const stdin = std.io.getStdIn().reader();
-    const bare_line = try stdin.readUntilDelimiterAlloc(
-        alloc,
-        '\n',
-        256,
-    );
-    defer alloc.free(bare_line);
+    const reader = std.io.getStdIn().reader();
+    const line = try reader.readUntilDelimiterAlloc(alloc, '\n', 1024);
+    const v: f32 = try std.fmt.parseFloat(f32, line);
 
-    const b = try std.fmt.parseInt(i32, bare_line, 10);
+    zigmaps.kernels.set_value_radius(v, 3, &map, MapPosition{ .x = 0, .y = 0 });
+    const avg = try zigmaps.kernels.mean_in_radius(&map, alloc, 0.5);
+    defer avg.free(alloc);
 
-    for (a) |*v| {
-        v.* = zigmaps.addme(v.*, b);
-    }
-    var sum: i32 = 0;
-    for (a) |v| {
-        sum += v;
-    }
-
-    std.debug.print("Sum: {}\n", .{sum});
+    const traverse = try zigmaps.traverse.traverse_calc(alloc, &map);
+    defer traverse.free(alloc);
 }
