@@ -29,6 +29,21 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
+    const header_step = b.addInstallHeaderFile(b.path("src/zigmaps.h"), "zigmaps.h");
+    b.getInstallStep().dependOn(&header_step.step);
+
+    const exe = b.addExecutable(.{
+        .name = "zigmaps",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(exe);
+
+    const run_exe = b.addRunArtifact(exe);
+    const run_step = b.step("run", "Run the executable");
+    run_step.dependOn(&run_exe.step);
+
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const main_tests = b.addTest(.{
