@@ -78,19 +78,22 @@ pub fn traverse_calc(alloc: std.mem.Allocator, elevation: *const MapLayer) !MapL
 
     // filter 15
     const traversability = try kernels.max_in_radius(&filtered_traversability, alloc, 0.1);
+
     return traversability;
 }
 
 test "no crash" {
-    const layer = try MapLayer.create(testing.allocator, MapLength{ .width = 1, .height = 1 }, 0.05);
+    var layer = try MapLayer.create(testing.allocator, MapLength{ .width = 1, .height = 1 }, 0.05);
     defer layer.free(testing.allocator);
+    layer.recenter(MapPosition{ .x = 0.5, .y = 0 });
 
-    layer.fill(3.0);
-    kernels.set_value_radius(1.0, 0.4, &layer, MapPosition{ .x = 0, .y = 0 });
-
-    const avg_layer = try kernels.mean_in_radius(&layer, testing.allocator, 0.5);
-    defer avg_layer.free(testing.allocator);
+    kernels.set_value_radius(0.0, 0.3, &layer, MapPosition{ .x = 0, .y = 0 });
+    kernels.set_value_radius(0.2, 0.15, &layer, MapPosition{ .x = 0, .y = 0 });
+    // std.debug.print("\n", .{});
+    // layer.grid.debug_print();
 
     const traverse = try traverse_calc(testing.allocator, &layer);
     defer traverse.free(testing.allocator);
+    // std.debug.print("\n", .{});
+    // traverse.grid.debug_print();
 }

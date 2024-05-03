@@ -15,19 +15,21 @@ pub fn mean_in_radius(layer: *const MapLayer, alloc: Allocator, radius: f32) !Ma
         pub fn process(op: *@This(), map: *const MapLayer, pos: MapPosition) f32 {
             const SumKernel = struct {
                 count: u32 = 0,
-                sum: f32 = 0,
+                sum: f32 = 0.0,
 
                 pub fn process(self: *@This(), k_map: *const MapLayer, k_pos: MapPosition) void {
                     if (k_map.get_value(k_pos)) |cell| {
-                        self.*.count += 1;
-                        self.*.sum += cell.*;
+                        if (!std.math.isNan(cell.*)) {
+                            self.*.count += 1;
+                            self.*.sum += cell.*;
+                        }
                     }
                 }
             };
 
             var k = SumKernel{};
             map.radius_iterator(pos, op.radius, SumKernel, &k);
-            const mean = k.sum / @as(f32, @floatFromInt(k.count));
+            const mean: f32 = k.sum / @as(f32, @floatFromInt(k.count));
             return mean;
         }
     };
