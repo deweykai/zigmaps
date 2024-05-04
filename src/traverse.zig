@@ -77,7 +77,7 @@ pub fn traverse_calc(alloc: std.mem.Allocator, elevation: *const MapLayer) !MapL
     defer filtered_traversability.free(alloc);
 
     // filter 15
-    const traversability = try kernels.max_in_radius(&filtered_traversability, alloc, 0.1);
+    const traversability = try kernels.max_in_radius(&filtered_traversability, alloc, 0.20);
 
     return traversability;
 }
